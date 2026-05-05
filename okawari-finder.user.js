@@ -136,10 +136,12 @@ function wrapper(pluginInfo) {
       '.okawari-plan-settings input[type=number]{width:72px;background:#13283b;color:#ffe54d;border:1px solid #20394e;padding:3px;}',
       '.okawari-plan-settings input[type=text]{width:120px;background:#13283b;color:#ffe54d;border:1px solid #20394e;padding:3px;}',
       '.okawari-plan-settings select{background:#13283b;color:#ffe54d;border:1px solid #20394e;padding:3px;}',
-      '.okawari-side-dialog{box-sizing:border-box;max-height:calc(100vh - 16px)!important;overflow:hidden!important;}',
+      '.okawari-side-dialog{box-sizing:border-box;max-height:calc(100vh - 16px)!important;overflow:hidden!important;z-index:10000!important;}',
       '.okawari-side-dialog .ui-dialog-content{box-sizing:border-box;max-height:calc(100vh - 62px)!important;overflow:auto!important;}',
       '.okawari-dialog-left{position:fixed!important;left:8px!important;right:auto!important;top:8px!important;bottom:auto!important;margin:0!important;}',
       '.okawari-dialog-right{position:fixed!important;right:8px!important;left:auto!important;top:8px!important;bottom:auto!important;margin:0!important;}',
+      '.okawari-fallback-dialog{position:fixed;z-index:10000;top:8px;left:8px;right:8px;max-height:calc(100vh - 16px);overflow:auto;background:#122333;border:2px solid #ffe100;padding:8px;box-shadow:0 4px 18px rgba(0,0,0,.55);}',
+      '.okawari-fallback-title{display:flex;justify-content:space-between;gap:8px;align-items:center;color:#fff;font:bold 14px Arial,sans-serif;margin-bottom:8px;}',
       '.okawari-message{padding:8px;margin:8px 0;background:#162531;border:1px solid #3f7191;color:#c8efff;}',
       '.okawari-warning{padding:8px;margin:8px 0;background:#3a2a12;border:1px solid #8a6500;color:#ffd98a;}',
       '.okawari-summary{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:6px;margin:8px 0;}',
@@ -1225,49 +1227,115 @@ function wrapper(pluginInfo) {
     return position === 'left' || position === 'center' || position === 'right';
   };
 
-  self.applyDialogPosition = function (contentId, position, width, sideWidth) {
-    var content = document.getElementById(contentId);
-    if (!content || !window.jQuery) return;
-    var jqContent = window.jQuery(content);
-    var jqDialog = jqContent.closest('.ui-dialog');
-    if (!jqDialog.length) return;
-    var dialog = jqDialog[0];
-    jqDialog.removeClass('okawari-side-dialog okawari-dialog-left okawari-dialog-right');
-    dialog.style.position = '';
-    dialog.style.left = '';
-    dialog.style.right = '';
-    dialog.style.top = '';
-    dialog.style.bottom = '';
-    dialog.style.margin = '';
-    dialog.style.width = '';
-    dialog.style.maxWidth = '';
-    content.style.maxHeight = '';
-    content.style.overflow = '';
+  self.dialogWidthPx = function (defaultWidth, maxWidth, ratio) {
+    var viewport = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0, 320);
+    var byRatio = Math.floor(viewport * ratio);
+    var width = Math.min(maxWidth, Math.max(320, byRatio || defaultWidth));
+    return Math.max(320, Math.min(width, viewport - 16));
+  };
 
-    if (position === 'center') {
-      if (jqContent.dialog && jqContent.hasClass('ui-dialog-content')) {
-        jqContent.dialog('option', 'width', width);
-        jqContent.dialog('option', 'position', { my: 'center', at: 'center', of: window });
+  self.applyDialogPosition = function (contentId, position, centerWidth, sideMaxWidth, sideRatio) {
+    try {
+      var content = document.getElementById(contentId);
+      if (!content || !window.jQuery) return;
+      var jqContent = window.jQuery(content);
+      var jqDialog = jqContent.closest('.ui-dialog');
+      if (!jqDialog.length) return;
+      var dialog = jqDialog[0];
+      var sideWidth = self.dialogWidthPx(centerWidth, sideMaxWidth, sideRatio);
+      var centeredWidth = self.dialogWidthPx(centerWidth, centerWidth, 0.92);
+      jqDialog.removeClass('okawari-side-dialog okawari-dialog-left okawari-dialog-right');
+      dialog.style.position = '';
+      dialog.style.left = '';
+      dialog.style.right = '';
+      dialog.style.top = '';
+      dialog.style.bottom = '';
+      dialog.style.margin = '';
+      dialog.style.width = '';
+      dialog.style.maxWidth = '';
+      content.style.maxHeight = '';
+      content.style.overflow = '';
+
+      if (position === 'center') {
+        if (jqContent.dialog && jqContent.hasClass('ui-dialog-content')) {
+          jqContent.dialog('option', 'width', centeredWidth);
+          jqContent.dialog('option', 'position', { my: 'center', at: 'center', of: window });
+        } else {
+          dialog.style.width = centeredWidth + 'px';
+        }
+        return;
       }
-      return;
-    }
 
-    jqDialog.addClass('okawari-side-dialog ' + (position === 'left' ? 'okawari-dialog-left' : 'okawari-dialog-right'));
-    dialog.style.width = sideWidth;
-    dialog.style.maxWidth = 'calc(100vw - 16px)';
-    content.style.maxHeight = 'calc(100vh - 62px)';
-    content.style.overflow = 'auto';
+      if (jqContent.dialog && jqContent.hasClass('ui-dialog-content')) {
+        jqContent.dialog('option', 'width', sideWidth);
+      }
+      jqDialog.addClass('okawari-side-dialog ' + (position === 'left' ? 'okawari-dialog-left' : 'okawari-dialog-right'));
+      dialog.style.width = sideWidth + 'px';
+      dialog.style.maxWidth = 'calc(100vw - 16px)';
+      content.style.maxHeight = 'calc(100vh - 62px)';
+      content.style.overflow = 'auto';
+    } catch (e) {
+      // Do not let optional positioning prevent the dialog from opening.
+    }
+  };
+
+  self.afterMainDialogRendered = function () {
+    self.applyDialogPosition('okawari-finder-content', self.settings.ui.mainPosition, 1100, 760, 0.52);
+    self.bindEvents();
+  };
+
+  self.ensureMainDialogVisible = function (html) {
+    window.setTimeout(function () {
+      var content = document.getElementById('okawari-finder-content');
+      if (!content) {
+        self.renderFallbackDialog(html);
+        return;
+      }
+      var dialog = window.jQuery ? window.jQuery(content).closest('.ui-dialog')[0] : null;
+      if (!dialog) return;
+      var rect = dialog.getBoundingClientRect();
+      var hidden = rect.width < 40 || rect.height < 40 ||
+        rect.right < 0 || rect.bottom < 0 ||
+        rect.left > (window.innerWidth || document.documentElement.clientWidth) ||
+        rect.top > (window.innerHeight || document.documentElement.clientHeight);
+      if (hidden) {
+        self.settings.ui.mainPosition = 'center';
+        self.applyDialogPosition('okawari-finder-content', 'center', 1100, 760, 0.52);
+      }
+    }, 120);
+  };
+
+  self.renderFallbackDialog = function (html) {
+    var existing = document.getElementById('okawari-finder-fallback');
+    if (existing) existing.parentNode.removeChild(existing);
+    var div = document.createElement('div');
+    div.id = 'okawari-finder-fallback';
+    div.className = 'okawari-fallback-dialog';
+    div.innerHTML = '<div class="okawari-fallback-title"><span>' + self.escape(self.title) + '</span><button type="button" data-action="close-fallback">閉じる</button></div>' +
+      '<div id="okawari-finder-content">' + html + '</div>';
+    document.body.appendChild(div);
+    self.bindEvents();
+  };
+
+  self.afterPreviewDialogRendered = function (result) {
+    self.bindPreviewEvents();
+    self.applyDialogPosition('okawari-preview-content', self.settings.ui.previewPosition, 760, 760, 0.46);
+    self.drawPreviewStep(result);
   };
 
   self.renderDialog = function () {
     var html = self.buildHtml();
     var existing = document.getElementById('okawari-finder-content');
+    var fallback = document.getElementById('okawari-finder-fallback');
     if (existing) {
       existing.innerHTML = html;
+      if (fallback) {
+        self.bindEvents();
+        return;
+      }
       var jqExisting = window.jQuery(existing);
       if (jqExisting.dialog && jqExisting.hasClass('ui-dialog-content')) jqExisting.dialog('open');
-      self.applyDialogPosition('okawari-finder-content', self.settings.ui.mainPosition, 1100, 'min(760px, 52vw)');
-      self.bindEvents();
+      self.afterMainDialogRendered();
       return;
     }
 
@@ -1285,8 +1353,9 @@ function wrapper(pluginInfo) {
       document.body.appendChild(div);
       window.jQuery(div).dialog({ title: self.title, width: 1100 });
     }
-    self.applyDialogPosition('okawari-finder-content', self.settings.ui.mainPosition, 1100, 'min(760px, 52vw)');
-    self.bindEvents();
+    self.afterMainDialogRendered();
+    window.setTimeout(self.afterMainDialogRendered, 0);
+    self.ensureMainDialogVisible(html);
   };
 
   self.renderOutputDialog = function () {
@@ -1364,9 +1433,7 @@ function wrapper(pluginInfo) {
       existing.innerHTML = html;
       var jqExisting = window.jQuery(existing);
       if (jqExisting.dialog && jqExisting.hasClass('ui-dialog-content')) jqExisting.dialog('open');
-      self.bindPreviewEvents();
-      self.applyDialogPosition('okawari-preview-content', self.settings.ui.previewPosition, 760, 'min(760px, 46vw)');
-      self.drawPreviewStep(result);
+      self.afterPreviewDialogRendered(result);
       return;
     }
 
@@ -1384,9 +1451,8 @@ function wrapper(pluginInfo) {
       document.body.appendChild(div);
       window.jQuery(div).dialog({ title: 'Okawari CF Plan Preview', width: 760 });
     }
-    self.bindPreviewEvents();
-    self.applyDialogPosition('okawari-preview-content', self.settings.ui.previewPosition, 760, 'min(760px, 46vw)');
-    self.drawPreviewStep(result);
+    self.afterPreviewDialogRendered(result);
+    window.setTimeout(function () { self.afterPreviewDialogRendered(result); }, 0);
   };
 
   self.previewStepCount = function (result) {
@@ -2036,6 +2102,10 @@ function wrapper(pluginInfo) {
         action = target && target.getAttribute ? target.getAttribute('data-action') : null;
       }
       if (action === 'load') self.loadBookmarks();
+      if (action === 'close-fallback') {
+        var fallback = document.getElementById('okawari-finder-fallback');
+        if (fallback && fallback.parentNode) fallback.parentNode.removeChild(fallback);
+      }
       if (action === 'toggle-map-pick') {
         self.mapPickEnabled = !self.mapPickEnabled;
         self.message = self.mapPickEnabled ?
@@ -2143,8 +2213,8 @@ function wrapper(pluginInfo) {
     if (previewPosition && self.validDialogPosition(previewPosition.value)) self.settings.ui.previewPosition = previewPosition.value;
     self.settings.drawOnMap = root.querySelector('[data-setting="drawOnMap"]').checked;
     self.saveUiSettings();
-    self.applyDialogPosition('okawari-finder-content', self.settings.ui.mainPosition, 1100, 'min(760px, 52vw)');
-    self.applyDialogPosition('okawari-preview-content', self.settings.ui.previewPosition, 760, 'min(760px, 46vw)');
+    self.applyDialogPosition('okawari-finder-content', self.settings.ui.mainPosition, 1100, 760, 0.52);
+    self.applyDialogPosition('okawari-preview-content', self.settings.ui.previewPosition, 760, 760, 0.46);
   };
 
   self.spineLabel = function (index) {
