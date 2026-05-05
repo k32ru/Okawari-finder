@@ -1,12 +1,21 @@
 // ==UserScript==
 // @id             iitc-plugin-okawari-finder
 // @name           IITC plugin: Okawari Finder
+// @namespace      https://github.com/k32ru/Okawari-finder
 // @category       Layer
-// @version        0.4.5
+// @version        0.4.6
 // @description    Pick a 15-portal bookmarked spine and find A bases plus repeat B portals for Orion okawari fields.
 // @author         k32ru
+// @updateURL      https://github.com/k32ru/Okawari-finder/raw/refs/heads/main/okawari-finder.user.js
+// @downloadURL    https://github.com/k32ru/Okawari-finder/raw/refs/heads/main/okawari-finder.user.js
+// @homepageURL    https://github.com/k32ru/Okawari-finder
+// @supportURL     https://github.com/k32ru/Okawari-finder/issues
+// @include        https://*.ingress.com/intel*
+// @include        http://*.ingress.com/intel*
 // @include        https://intel.ingress.com/*
 // @include        http://intel.ingress.com/*
+// @match          https://*.ingress.com/intel*
+// @match          http://*.ingress.com/intel*
 // @match          https://intel.ingress.com/*
 // @match          http://intel.ingress.com/*
 // @grant          none
