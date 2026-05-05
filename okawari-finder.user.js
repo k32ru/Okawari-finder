@@ -3,7 +3,7 @@
 // @name           IITC plugin: Okawari Finder
 // @namespace      https://github.com/k32ru/Okawari-finder
 // @category       Layer
-// @version        0.4.7
+// @version        0.4.8
 // @description    Pick a 15-portal bookmarked spine and find A bases plus repeat B portals for Orion okawari fields.
 // @author         k32ru
 // @updateURL      https://github.com/k32ru/Okawari-finder/raw/refs/heads/main/okawari-finder.user.js
@@ -1227,6 +1227,12 @@ function wrapper(pluginInfo) {
     return position === 'left' || position === 'center' || position === 'right';
   };
 
+  self.setPickMode = function (mode) {
+    self.mapPickEnabled = mode === 'target';
+    self.manualAPickEnabled = mode === 'manual-a';
+    self.manualBPickEnabled = mode === 'manual-b';
+  };
+
   self.dialogWidthPx = function (defaultWidth, maxWidth, ratio) {
     var viewport = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0, 320);
     var byRatio = Math.floor(viewport * ratio);
@@ -1464,16 +1470,15 @@ function wrapper(pluginInfo) {
     var model = self.previewStepModel(result, step);
     var logs = model.logs.map(function (row, i) {
       var visible = self.previewLogVisible(row);
+      if (!visible) return '';
       var key = self.previewDoneKey(result, row);
       var checked = self.previewState.done && self.previewState.done[key] ? 'checked' : '';
       return '<tr><td>' + (i + 1) + '<input class="okawari-preview-done" type="checkbox" data-preview-done="' + self.escape(key) + '" ' + checked + '></td>' +
-        '<td class="' + (visible ? '' : 'okawari-preview-hidden-log') + '">' + (visible ? self.previewLogHtml(row) : '') + '</td></tr>';
+        '<td>' + self.previewLogHtml(row) + '</td></tr>';
     }).join('');
     return [
       '<div class="okawari-preview-root">',
       '<div class="okawari-preview-summary">',
-      '基点A: ' + self.resultAs(result).length + '個 / おかわりポータル: ' + result.Bs.length + '個 / 背骨: ' + result.spine.length + '本 / ',
-      'A鍵目安: ' + self.requiredAKeys(result) + '本以上 / ',
       'プレビュー: ' + model.name + ' / ' + (step + 1) + ' of ' + self.previewStepCount(result),
       '</div>',
       '<div class="okawari-preview-step">' + self.escape(model.title) + '</div>',
@@ -2107,10 +2112,11 @@ function wrapper(pluginInfo) {
         if (fallback && fallback.parentNode) fallback.parentNode.removeChild(fallback);
       }
       if (action === 'toggle-map-pick') {
-        self.mapPickEnabled = !self.mapPickEnabled;
+        var nextMapPick = !self.mapPickEnabled;
+        self.setPickMode(nextMapPick ? 'target' : null);
         self.message = self.mapPickEnabled ?
-          'マップ上のポータルをクリックすると対象ポータルに追加します。' :
-          'マップクリック追加をOFFにしました。';
+          '対象ポータルクリックをONにしました。A手動追加とB手動追加はOFFです。' :
+          '対象ポータルクリックをOFFにしました。';
         self.renderDialog();
       }
       if (action === 'clear-targets') self.clearTargetPortals();
@@ -2139,18 +2145,18 @@ function wrapper(pluginInfo) {
         self.renderDialog();
       }
       if (action === 'toggle-manual-b') {
-        self.manualBPickEnabled = !self.manualBPickEnabled;
-        if (self.manualBPickEnabled) self.manualAPickEnabled = false;
+        var nextManualB = !self.manualBPickEnabled;
+        self.setPickMode(nextManualB ? 'manual-b' : null);
         self.message = self.manualBPickEnabled ?
-          'B手動追加をONにしました。マップ上のポータルをクリックすると、選択中の計画へBとして追加します。' :
+          'B手動追加をONにしました。対象ポータルクリックとA手動追加はOFFです。' :
           'B手動追加をOFFにしました。';
         self.renderDialog();
       }
       if (action === 'toggle-manual-a') {
-        self.manualAPickEnabled = !self.manualAPickEnabled;
-        if (self.manualAPickEnabled) self.manualBPickEnabled = false;
+        var nextManualA = !self.manualAPickEnabled;
+        self.setPickMode(nextManualA ? 'manual-a' : null);
         self.message = self.manualAPickEnabled ?
-          'A手動変更・追加をONにしました。マップ上のポータルをクリックすると、選択中の計画へAとして追加します。' :
+          'A手動変更・追加をONにしました。対象ポータルクリックとB手動追加はOFFです。' :
           'A手動変更・追加をOFFにしました。';
         self.renderDialog();
       }
