@@ -2,8 +2,8 @@
 // @id             iitc-plugin-okawari-finder
 // @name           IITC plugin: Okawari Finder
 // @category       Layer
-// @version        0.4.4
-// @description    Pick a 15-portal bookmarked spine and find fixed A plus repeat B portals for Orion okawari fields.
+// @version        0.4.5
+// @description    Pick a 15-portal bookmarked spine and find A bases plus repeat B portals for Orion okawari fields.
 // @author         k32ru
 // @include        https://intel.ingress.com/*
 // @include        http://intel.ingress.com/*
@@ -34,6 +34,7 @@ function wrapper(pluginInfo) {
   self.storageKey = 'plugin-okawari-finder-target-portals';
   self.previewStorageKey = 'plugin-okawari-finder-plan-preview-state';
   self.mapPickEnabled = false;
+  self.manualAPickEnabled = false;
   self.manualBPickEnabled = false;
   self.settingsOpen = false;
   self.previewState = {
@@ -255,6 +256,10 @@ function wrapper(pluginInfo) {
     var guid = data && (data.guid || data.portalGuid || data.selectedPortalGuid) || window.selectedPortal;
     var portal = self.portalFromMapGuid(guid);
     if (!portal) return;
+    if (self.manualAPickEnabled) {
+      self.addManualAPortal(portal);
+      return;
+    }
     if (self.manualBPickEnabled) {
       self.addManualBPortal(portal);
       return;
@@ -470,6 +475,7 @@ function wrapper(pluginInfo) {
     self.warnings = [];
     self.results = [];
     self.selectedResult = -1;
+    self.manualAPickEnabled = false;
     self.manualBPickEnabled = false;
     self.clearMap();
 
@@ -595,16 +601,33 @@ function wrapper(pluginInfo) {
     return true;
   };
 
+  self.resultAs = function (result) {
+    if (!result) return [];
+    if (result.As && result.As.length) return result.As;
+    return result.A ? [result.A] : [];
+  };
+
+  self.aLabel = function (index, count) {
+    return count > 1 ? 'A' + (index + 1) : 'A';
+  };
+
+  self.originalACount = function (result, basesA) {
+    return typeof result.originalACount === 'number' ? result.originalACount : basesA.length;
+  };
+
   self.makeResult = function (spine, baseA, basesB, cluster) {
-    var oriented = self.orientSpineForBase(baseA, basesB[0], spine);
-    var plan = self.buildPlan(oriented, baseA, basesB);
-    var fields = oriented.length * basesB.length;
+    var basesA = Array.isArray(baseA) ? baseA.slice() : (baseA ? [baseA] : []);
+    var primaryA = basesA[0];
+    var oriented = primaryA ? self.orientSpineForBase(primaryA, basesB[0], spine) : self.orderSpine(spine);
+    var plan = self.buildPlan(oriented, basesA, basesB);
+    var fields = oriented.length * basesB.length * basesA.length;
     var scores = self.scorePlan(plan, fields);
-    var shape = self.shapeScore(oriented, baseA, basesB);
+    var shape = self.shapeScoreForAs(oriented, basesA, basesB);
     var okawari = self.okawariEaseScore(basesB);
     return {
       spine: oriented,
-      A: baseA,
+      A: primaryA,
+      As: basesA,
       Bs: basesB,
       plan: plan,
       fields: fields,
@@ -617,19 +640,77 @@ function wrapper(pluginInfo) {
       okawariAvgDistance: okawari.avgDistance,
       clusterCenter: cluster ? cluster.center : basesB[0],
       clusterDensityScore: cluster ? cluster.densityScore : okawari.score,
+      aCount: basesA.length,
+      originalACount: basesA.length,
       bCount: basesB.length,
       originalBCount: basesB.length
     };
   };
 
+  self.rebuildResultWithAs = function (result, basesA, originalACount) {
+    var rebuilt = self.makeResult(result.spine, basesA, result.Bs, {
+      center: result.clusterCenter || result.Bs[0],
+      densityScore: result.clusterDensityScore || 0
+    });
+    rebuilt.originalACount = Math.min(originalACount, basesA.length);
+    rebuilt.manualACount = Math.max(0, basesA.length - originalACount);
+    rebuilt.originalBCount = result.originalBCount || result.Bs.length;
+    rebuilt.manualBCount = Math.max(0, result.Bs.length - rebuilt.originalBCount);
+    return rebuilt;
+  };
+
   self.rebuildResultWithBs = function (result, basesB, originalBCount) {
-    var rebuilt = self.makeResult(result.spine, result.A, basesB, {
+    var rebuilt = self.makeResult(result.spine, self.resultAs(result), basesB, {
       center: result.clusterCenter || basesB[0],
       densityScore: result.clusterDensityScore || 0
     });
+    rebuilt.originalACount = self.originalACount(result, self.resultAs(result));
+    rebuilt.manualACount = Math.max(0, self.resultAs(result).length - rebuilt.originalACount);
     rebuilt.originalBCount = originalBCount;
     rebuilt.manualBCount = Math.max(0, basesB.length - originalBCount);
     return rebuilt;
+  };
+
+  self.addManualAPortal = function (portal) {
+    self.readSettings();
+    var result = self.results[self.selectedResult];
+    if (!result) {
+      self.message = 'A手動変更・追加する計画を先に選択してください。';
+      self.renderDialog();
+      return;
+    }
+    var check = self.validateManualAPortal(result, portal);
+    if (!check.ok) {
+      self.message = 'A手動変更・追加NG: ' + check.reasons.join(' / ');
+      self.renderDialog();
+      if (self.settings.drawOnMap) self.drawResult(result);
+      return;
+    }
+    var basesA = self.resultAs(result);
+    var originalACount = self.originalACount(result, basesA);
+    var rebuilt = self.rebuildResultWithAs(result, basesA.concat([portal]), originalACount);
+    self.results[self.selectedResult] = rebuilt;
+    self.message = 'Aを手動追加しました: ' + portal.name + '（現在 ' + rebuilt.As.length + '件）';
+    self.renderDialog();
+    if (self.settings.drawOnMap) self.drawResult(rebuilt);
+  };
+
+  self.validateManualAPortal = function (result, portal) {
+    var reasons = [];
+    var basesA = self.resultAs(result);
+    if (basesA.some(function (p) { return p.guid === portal.guid; })) reasons.push('既にAに含まれています');
+    if (result.spine.some(function (p) { return p.guid === portal.guid; })) reasons.push('背骨ポータルと同じです');
+    if (result.Bs.some(function (p) { return p.guid === portal.guid; })) reasons.push('基点Bと同じポータルです');
+    if (reasons.length) return { ok: false, reasons: reasons };
+
+    var spine = self.orderSpine(result.spine);
+    if (!self.baseCreatesValidFan(portal, spine)) {
+      reasons.push('Aから背骨15本へのリンクが被り判定にかかります');
+    }
+    if (!self.validAForAllBs(portal, result.Bs, spine)) {
+      reasons.push('すべてのBとのA-B-背骨構造が成立しません');
+    }
+    return { ok: !reasons.length, reasons: reasons };
   };
 
   self.addManualBPortal = function (portal) {
@@ -658,7 +739,8 @@ function wrapper(pluginInfo) {
 
   self.validateManualBPortal = function (result, portal) {
     var reasons = [];
-    if (portal.guid === result.A.guid) reasons.push('基点Aと同じポータルです');
+    var basesA = self.resultAs(result);
+    if (basesA.some(function (p) { return p.guid === portal.guid; })) reasons.push('基点Aと同じポータルです');
     if (result.spine.some(function (p) { return p.guid === portal.guid; })) reasons.push('背骨ポータルと同じです');
     if (result.Bs.some(function (p) { return p.guid === portal.guid; })) reasons.push('既にBに含まれています');
     if (reasons.length) return { ok: false, reasons: reasons };
@@ -666,16 +748,61 @@ function wrapper(pluginInfo) {
     var spine = self.orderSpine(result.spine);
     var start = spine[0];
     var end = spine[spine.length - 1];
-    if (self.sideMeters(start, end, result.A) * self.sideMeters(start, end, portal) >= 0) {
-      reasons.push('Aと背骨列の反対側にありません');
-    }
     if (!self.baseCreatesValidFan(portal, spine)) {
       reasons.push('Bから背骨15本へのリンクが被り判定にかかります');
     }
-    if (!self.validABTriangle(result.A, portal, spine)) {
-      reasons.push('A-Bと背骨15本で三角形が成立しません');
+    for (var i = 0; i < basesA.length; i++) {
+      if (self.sideMeters(start, end, basesA[i]) * self.sideMeters(start, end, portal) >= 0) {
+        reasons.push(self.aLabel(i, basesA.length) + 'と背骨列の反対側にありません');
+      }
+      if (!self.validABTriangle(basesA[i], portal, spine)) {
+        reasons.push(self.aLabel(i, basesA.length) + '-Bと背骨15本で三角形が成立しません');
+      }
     }
     return { ok: !reasons.length, reasons: reasons };
+  };
+
+  self.removeLastManualA = function () {
+    var result = self.results[self.selectedResult];
+    if (!result) return;
+    var basesA = self.resultAs(result);
+    var originalACount = self.originalACount(result, basesA);
+    if (!basesA.length) {
+      self.message = '削除できるAはありません。';
+      self.renderDialog();
+      return;
+    }
+    var removed = basesA[basesA.length - 1];
+    var removingAutoA = basesA.length <= originalACount;
+    if (removingAutoA && !window.confirm('自動選択されたAを削除しますか？')) {
+      self.message = '自動選択Aの削除をキャンセルしました。';
+      self.renderDialog();
+      return;
+    }
+    var nextAs = basesA.slice(0, -1);
+    var nextOriginalACount = removingAutoA ? Math.max(0, originalACount - 1) : originalACount;
+    var rebuilt = self.rebuildResultWithAs(result, nextAs, nextOriginalACount);
+    self.results[self.selectedResult] = rebuilt;
+    self.message = (removingAutoA ? '自動選択Aを削除しました: ' : '最後の手動追加Aを削除しました: ') + removed.name;
+    self.renderDialog();
+    if (self.settings.drawOnMap) self.drawResult(rebuilt);
+  };
+
+  self.clearManualAs = function () {
+    var result = self.results[self.selectedResult];
+    if (!result) return;
+    var basesA = self.resultAs(result);
+    var originalACount = self.originalACount(result, basesA);
+    if (basesA.length <= originalACount) {
+      self.message = 'クリアできる手動追加Aはありません。';
+      self.renderDialog();
+      return;
+    }
+    var rebuilt = self.rebuildResultWithAs(result, basesA.slice(0, originalACount), originalACount);
+    self.results[self.selectedResult] = rebuilt;
+    self.message = '手動追加Aをクリアしました。';
+    self.renderDialog();
+    if (self.settings.drawOnMap) self.drawResult(rebuilt);
   };
 
   self.removeLastManualB = function () {
@@ -711,16 +838,19 @@ function wrapper(pluginInfo) {
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
   };
 
-  self.buildPlan = function (spine, baseA, basesB) {
+  self.buildPlan = function (spine, basesA, basesB) {
     var links = [];
+    basesA = Array.isArray(basesA) ? basesA : [basesA];
     function add(from, to, agent, label) {
       links.push({ from: from, to: to, agent: agent, label: label || '' });
     }
 
     for (var i = 0; i < spine.length - 1; i++) add(spine[i], spine[i + 1], 'C', '背骨リンク');
-    for (var a = 0; a < spine.length; a++) add(spine[a], baseA, self.agentForASpineLink(a), '背骨→基点A');
+    for (var ai = 0; ai < basesA.length; ai++) {
+      for (var a = 0; a < spine.length; a++) add(spine[a], basesA[ai], self.agentForASpineLink(a), '背骨→基点' + self.aLabel(ai, basesA.length));
+    }
     for (var b = 0; b < basesB.length; b++) {
-      add(basesB[b], baseA, 'C', 'B-A底辺リンク');
+      for (var ab = 0; ab < basesA.length; ab++) add(basesB[b], basesA[ab], 'C', 'B-A底辺リンク');
       for (var j = 0; j < spine.length; j++) add(basesB[b], spine[j], self.agentForBSpineLink(j), '基点B-' + (b + 1) + '→背骨');
     }
     return links;
@@ -802,7 +932,7 @@ function wrapper(pluginInfo) {
     var result = self.getSelectedResultForSave();
     if (!result) return;
     self.downloadJson(self.resultToDrawExportData(result), 'okawari-draw-data');
-    self.message = '背骨とA/Bからのリンク線をドローデータJSONで保存しました。';
+    self.message = '背骨とA群/Bからのリンク線をドローデータJSONで保存しました。';
     self.renderDialog();
   };
 
@@ -843,9 +973,12 @@ function wrapper(pluginInfo) {
   };
 
   self.resultBookmarkPortals = function (result) {
+    var basesA = self.resultAs(result);
     return result.spine.map(function (p, index) {
       return { label: self.spineLabel(index), portal: p };
-    }).concat([{ label: 'A', portal: result.A }]).concat(result.Bs.map(function (p, index) {
+    }).concat(basesA.map(function (p, index) {
+      return { label: self.aLabel(index, basesA.length), portal: p };
+    })).concat(result.Bs.map(function (p, index) {
       return { label: 'B' + (index + 1), portal: p };
     }));
   };
@@ -868,11 +1001,12 @@ function wrapper(pluginInfo) {
   };
 
   self.resultToExportData = function (result) {
+    var basesA = self.resultAs(result);
     return {
       format: 'okawari-finder-result',
       formatVersion: '0.1',
       plugin: self.title,
-      pluginVersion: '0.4.4',
+      pluginVersion: '0.4.5',
       generatedAt: new Date().toISOString(),
       settings: {
         spineSize: self.settings.spineSize,
@@ -883,7 +1017,8 @@ function wrapper(pluginInfo) {
       },
       bookmarks: {
         spine: result.spine.map(function (p, index) { return self.portalToData(p, self.spineLabel(index)); }),
-        A: self.portalToData(result.A, 'A'),
+        A: basesA[0] ? self.portalToData(basesA[0], 'A') : null,
+        As: basesA.map(function (p, index) { return self.portalToData(p, self.aLabel(index, basesA.length)); }),
         Bs: result.Bs.map(function (p, index) { return self.portalToData(p, 'B' + (index + 1)); })
       },
       result: {
@@ -895,6 +1030,9 @@ function wrapper(pluginInfo) {
         straightness: result.straightness,
         okawariScore: result.okawariScore,
         okawariAvgDistance: result.okawariAvgDistance,
+        aCount: basesA.length,
+        originalACount: self.originalACount(result, basesA),
+        manualACount: Math.max(0, basesA.length - self.originalACount(result, basesA)),
         bCount: result.bCount,
         originalBCount: result.originalBCount || result.bCount,
         manualBCount: Math.max(0, result.Bs.length - (result.originalBCount || result.Bs.length))
@@ -939,7 +1077,11 @@ function wrapper(pluginInfo) {
   };
 
   self.resultMarkers = function (result) {
-    return [{ label: 'A', portal: self.portalToData(result.A, 'A') }]
+    var basesA = self.resultAs(result);
+    return basesA.map(function (p, i) {
+      var label = self.aLabel(i, basesA.length);
+      return { label: label, portal: self.portalToData(p, label) };
+    })
       .concat(result.Bs.map(function (p, i) { return { label: 'B' + (i + 1), portal: self.portalToData(p, 'B' + (i + 1)) }; }))
       .concat(result.spine.map(function (p, i) { return { label: self.spineLabel(i), portal: self.portalToData(p, self.spineLabel(i)) }; }));
   };
@@ -975,11 +1117,13 @@ function wrapper(pluginInfo) {
     }
 
     var spine = (data.bookmarks && data.bookmarks.spine || []).map(self.portalFromData);
+    var basesA = (data.bookmarks && data.bookmarks.As || []).map(self.portalFromData).filter(Boolean);
     var baseA = self.portalFromData(data.bookmarks && data.bookmarks.A);
-    var basesB = (data.bookmarks && data.bookmarks.Bs || []).map(self.portalFromData);
-    if (spine.length !== self.settings.spineSize || !baseA || !basesB.length) {
+    if (!basesA.length && baseA) basesA = [baseA];
+    var basesB = (data.bookmarks && data.bookmarks.Bs || []).map(self.portalFromData).filter(Boolean);
+    if (spine.length !== self.settings.spineSize || !basesB.length) {
       self.message = '結果ファイルに必要な背骨/A/Bデータがありません。';
-      self.warnings = ['背骨15本、基点A、基点Bが必要です。'];
+      self.warnings = ['背骨15本、基点Bが必要です。Aが空の計画は読み込み後に手動追加できます。'];
       self.renderDialog();
       return;
     }
@@ -995,7 +1139,7 @@ function wrapper(pluginInfo) {
       }
     }
 
-    var result = self.makeResult(spine, baseA, basesB, null);
+    var result = self.makeResult(spine, basesA, basesB, null);
     if (data.result) {
       result.fields = data.result.fields || result.fields;
       result.links = data.result.links || result.links;
@@ -1005,6 +1149,9 @@ function wrapper(pluginInfo) {
       result.straightness = data.result.straightness || result.straightness;
       result.okawariScore = data.result.okawariScore || result.okawariScore;
       result.okawariAvgDistance = data.result.okawariAvgDistance || result.okawariAvgDistance;
+      result.aCount = data.result.aCount || result.aCount;
+      result.originalACount = typeof data.result.originalACount === 'number' ? data.result.originalACount : result.aCount;
+      result.manualACount = data.result.manualACount || Math.max(0, result.As.length - result.originalACount);
       result.bCount = data.result.bCount || result.bCount;
       result.originalBCount = data.result.originalBCount || result.bCount;
       result.manualBCount = data.result.manualBCount || Math.max(0, result.Bs.length - result.originalBCount);
@@ -1016,6 +1163,7 @@ function wrapper(pluginInfo) {
     self.saveTargetPortals();
     self.results = [result];
     self.selectedResult = 0;
+    self.manualAPickEnabled = false;
     self.manualBPickEnabled = false;
     self.warnings = [];
     self.message = '結果JSONを読み込みました。';
@@ -1174,7 +1322,7 @@ function wrapper(pluginInfo) {
     return [
       '<div class="okawari-preview-root">',
       '<div class="okawari-preview-summary">',
-      'おかわりポータル: ' + result.Bs.length + '個 / 背骨: ' + result.spine.length + '本 / ',
+      '基点A: ' + self.resultAs(result).length + '個 / おかわりポータル: ' + result.Bs.length + '個 / 背骨: ' + result.spine.length + '本 / ',
       'A鍵目安: ' + self.requiredAKeys(result) + '本以上 / ',
       'プレビュー: ' + model.name + ' / ' + (step + 1) + ' of ' + self.previewStepCount(result),
       '</div>',
@@ -1211,6 +1359,7 @@ function wrapper(pluginInfo) {
       '<div>A: ' + self.escape(result.scores.A) + '点　B: ' + self.escape(result.scores.B) + '点　C: ' + self.escape(result.scores.C) + '点</div>',
       '<div><b>Team: ' + self.escape(result.scores.team) + '点</b></div>',
       '<div>Fields: ' + self.escape(result.fields) + '枚　Links: ' + self.escape(result.links) + '本</div>',
+      '<div>基点A: ' + self.escape(self.resultAs(result).length) + '個</div>',
       '<div>おかわりB: ' + self.escape(result.Bs.length) + '本　おかわりしやすさ: ' + self.escape(result.okawariScore) + '</div>',
       '<div>B間平均距離: ' + self.escape(Math.round(result.okawariAvgDistance || 0)) + 'm　B密度半径: ' + self.escape(self.settings.bClusterRadius) + 'm</div>',
       '</div>',
@@ -1248,15 +1397,16 @@ function wrapper(pluginInfo) {
 
   self.previewPlanKey = function (result) {
     return [
-      result.A.guid,
+      self.resultAs(result).map(function (p) { return p.guid; }).join(','),
       result.spine.map(function (p) { return p.guid; }).join(','),
       result.Bs.map(function (p) { return p.guid; }).join(',')
     ].join('|');
   };
 
   self.requiredAKeys = function (result) {
-    return (result && result.spine ? result.spine.length : self.settings.spineSize) +
-      (result && result.Bs ? result.Bs.length : self.settings.repeatBases);
+    var aCount = result ? self.resultAs(result).length : 1;
+    return ((result && result.spine ? result.spine.length : self.settings.spineSize) +
+      (result && result.Bs ? result.Bs.length : self.settings.repeatBases)) * aCount;
   };
 
   self.previewStepModel = function (result, step) {
@@ -1267,13 +1417,14 @@ function wrapper(pluginInfo) {
 
   self.previewKeyStep = function (result) {
     var required = self.requiredAKeys(result);
+    var aCount = self.resultAs(result).length;
     return {
       name: 'P1',
       title: 'P1. A鍵堀',
       note: '必要なA鍵数を計算します。',
       logs: [
         self.previewLog('A鍵必要数を計算します。', null, 'P1-key-start'),
-        self.previewLog('計算: 背骨' + result.spine.length + '本 + Bおかわり' + result.Bs.length + '個 = ' + required + '本。', null, 'P1-key-calc'),
+        self.previewLog('計算: (背骨' + result.spine.length + '本 + Bおかわり' + result.Bs.length + '個) × A' + aCount + '個 = ' + required + '本。', null, 'P1-key-calc'),
         self.previewLog('最低目安: 基点Aキーを' + required + '本以上掘ります。', null, 'P1-key-result')
       ]
     };
@@ -1281,6 +1432,7 @@ function wrapper(pluginInfo) {
 
   self.previewCommonStep = function (result) {
     var logs = [self.previewLog('背骨間リンクは' + self.agentLabel('C') + 'が作成します。', null, 'P2-spine-note')];
+    var basesA = self.resultAs(result);
     for (var i = 0; i < result.spine.length - 1; i++) {
       logs.push(self.previewLinkLog(
         self.agentLabel('C') + ': ' + self.spineLabel(i) + ' ' + result.spine[i].name + ' から ' + self.spineLabel(i + 1) + ' ' + result.spine[i + 1].name + ' へリンク',
@@ -1292,23 +1444,26 @@ function wrapper(pluginInfo) {
         ]
       ));
     }
-    logs.push(self.previewLog('背骨から基点Aへのリンクを作成します。' + self.agentLabel('B') + ' / ' + self.agentLabel('A') + 'の順番です。', null, 'P2-A-note'));
-    for (var a = 0; a < result.spine.length; a++) {
-      var agent = self.agentForASpineLink(a);
-      logs.push(self.previewLinkLog(
-        self.agentLabel(agent) + ': ' + self.spineLabel(a) + ' ' + result.spine[a].name + ' から 基点A ' + result.A.name + ' へリンク',
-        agent,
-        'P2-A-' + a,
-        [
-          { label: self.spineLabel(a) + ' ' + result.spine[a].name, portal: result.spine[a] },
-          { label: '基点A ' + result.A.name, portal: result.A }
-        ]
-      ));
+    logs.push(self.previewLog('背骨から各基点Aへのリンクを作成します。' + self.agentLabel('B') + ' / ' + self.agentLabel('A') + 'の順番です。', null, 'P2-A-note'));
+    for (var ai = 0; ai < basesA.length; ai++) {
+      var aLabel = self.aLabel(ai, basesA.length);
+      for (var a = 0; a < result.spine.length; a++) {
+        var agent = self.agentForASpineLink(a);
+        logs.push(self.previewLinkLog(
+          self.agentLabel(agent) + ': ' + self.spineLabel(a) + ' ' + result.spine[a].name + ' から 基点' + aLabel + ' ' + basesA[ai].name + ' へリンク',
+          agent,
+          'P2-' + aLabel + '-' + a,
+          [
+            { label: self.spineLabel(a) + ' ' + result.spine[a].name, portal: result.spine[a] },
+            { label: '基点' + aLabel + ' ' + basesA[ai].name, portal: basesA[ai] }
+          ]
+        ));
+      }
     }
     return {
       name: 'P2',
-      title: 'P2. 背骨間リンクと背骨から基点Aへのリンク',
-      note: '背骨間は緑、背骨から基点Aへのリンクは 黒, 赤, 黒, 赤... の担当順で描画します。',
+      title: 'P2. 背骨間リンクと背骨から基点A群へのリンク',
+      note: '背骨間は緑、背骨から各基点Aへのリンクは 黒, 赤, 黒, 赤... の担当順で描画します。',
       logs: logs
     };
   };
@@ -1316,18 +1471,22 @@ function wrapper(pluginInfo) {
   self.previewBStep = function (result, bIndex) {
     var baseB = result.Bs[bIndex];
     var label = 'B' + (bIndex + 1);
+    var basesA = self.resultAs(result);
     var logs = [
-      self.previewLog(label + 'おかわりポイントからのリンクを作成します。前のB起点リンクは描画から消します。', null, 'P' + (bIndex + 3) + '-note'),
-      self.previewLinkLog(
-        self.agentLabel('C') + ': ' + label + ' ' + baseB.name + ' から 基点A ' + result.A.name + ' へリンク',
+      self.previewLog(label + 'おかわりポイントからのリンクを作成します。前のB起点リンクは描画から消します。', null, 'P' + (bIndex + 3) + '-note')
+    ];
+    for (var ai = 0; ai < basesA.length; ai++) {
+      var aLabel = self.aLabel(ai, basesA.length);
+      logs.push(self.previewLinkLog(
+        self.agentLabel('C') + ': ' + label + ' ' + baseB.name + ' から 基点' + aLabel + ' ' + basesA[ai].name + ' へリンク',
         'C',
-        'P' + (bIndex + 3) + '-BA',
+        'P' + (bIndex + 3) + '-B-' + aLabel,
         [
           { label: label + ' ' + baseB.name, portal: baseB },
-          { label: '基点A ' + result.A.name, portal: result.A }
+          { label: '基点' + aLabel + ' ' + basesA[ai].name, portal: basesA[ai] }
         ]
-      )
-    ];
+      ));
+    }
     for (var i = 0; i < result.spine.length; i++) {
       var agent = self.agentForBSpineLink(i);
       logs.push(self.previewLinkLog(
@@ -1344,7 +1503,7 @@ function wrapper(pluginInfo) {
     return {
       name: 'P' + (bIndex + 3),
       title: 'P' + (bIndex + 3) + '. ' + label + 'おかわりポイント',
-      note: label + 'から基点Aは緑、' + label + 'から背骨は 赤, 黒, 赤, 黒... の担当順で描画します。',
+      note: label + 'から各基点Aは緑、' + label + 'から背骨は 赤, 黒, 赤, 黒... の担当順で描画します。',
       logs: logs
     };
   };
@@ -1401,7 +1560,7 @@ function wrapper(pluginInfo) {
       '<div class="okawari-output-actions">',
       self.outputActionCardHtml('json', 'JSON', '独自形式'),
       self.outputActionCardHtml('bookmark', 'Bookmark', '使用するポータルのブックマークデータ'),
-      self.outputActionCardHtml('draw', 'DrawData', '背骨とAとBの各おかわりポータルから線を引いた状態'),
+      self.outputActionCardHtml('draw', 'DrawData', '背骨とA群とBの各おかわりポータルから線を引いた状態'),
       self.outputActionCardHtml('preview-csv', '計画プレビューCSV', 'P1から最後のおかわりPまでの実行ログ全件'),
       '</div>',
       '<div class="okawari-output-copy">',
@@ -1546,6 +1705,7 @@ function wrapper(pluginInfo) {
       '</div>',
       self.settingsPanelHtml(),
       '<div class="okawari-message">' + self.escape(self.message) + '</div>',
+      self.manualAControlsHtml(),
       self.manualBControlsHtml(),
       '</fieldset>'
     ].join('');
@@ -1581,6 +1741,29 @@ function wrapper(pluginInfo) {
       '<button type="button" data-action="clear-manual-b">手動Bをクリア</button>',
       '</div>',
       '<div class="okawari-muted">ONの間、マップ上のポータルをクリックすると選択中の計画へBとして追加します。</div>',
+      '</div>'
+    ].join('');
+  };
+
+  self.manualAControlsHtml = function () {
+    var result = self.results[self.selectedResult];
+    if (!result) return '';
+    var basesA = self.resultAs(result);
+    var originalACount = self.originalACount(result, basesA);
+    var manualACount = Math.max(0, basesA.length - originalACount);
+    return [
+      '<div class="okawari-panel okawari-manual-b">',
+      '<h4>A手動変更・追加</h4>',
+      '<div>自動A: ' + originalACount + '件 / 手動追加A: ' + manualACount + '件 / 合計A: ' + basesA.length + '件</div>',
+      '<div class="okawari-muted">' + basesA.map(function (p, i) {
+        return self.aLabel(i, basesA.length) + ': ' + self.escape(p.name);
+      }).join(' / ') + '</div>',
+      '<div class="okawari-actions">',
+      '<button type="button" data-action="toggle-manual-a">A手動変更・追加: ' + (self.manualAPickEnabled ? 'ON' : 'OFF') + '</button>',
+      '<button type="button" data-action="remove-last-manual-a">最後のAを削除</button>',
+      '<button type="button" data-action="clear-manual-a">手動Aをクリア</button>',
+      '</div>',
+      '<div class="okawari-muted">ONの間、マップ上のポータルをクリックすると選択中の計画へAとして追加します。</div>',
       '</div>'
     ].join('');
   };
@@ -1727,9 +1910,10 @@ function wrapper(pluginInfo) {
 
   self.resultsHtml = function () {
     var rows = self.results.map(function (r, i) {
+      var basesA = self.resultAs(r);
       return '<tr class="' + (i === self.selectedResult ? 'selected' : '') + '">' +
         '<td>' + (i + 1) + '</td>' +
-        '<td>' + self.escape(r.A.name) + '</td>' +
+        '<td>' + self.escape(basesA.map(function (p) { return p.name; }).join(' / ')) + '</td>' +
         '<td>' + r.shapeScore + '</td>' +
         '<td><button type="button" data-action="select-result" data-index="' + i + '">選択</button></td>' +
         '</tr>';
@@ -1789,11 +1973,22 @@ function wrapper(pluginInfo) {
       }
       if (action === 'toggle-manual-b') {
         self.manualBPickEnabled = !self.manualBPickEnabled;
+        if (self.manualBPickEnabled) self.manualAPickEnabled = false;
         self.message = self.manualBPickEnabled ?
           'B手動追加をONにしました。マップ上のポータルをクリックすると、選択中の計画へBとして追加します。' :
           'B手動追加をOFFにしました。';
         self.renderDialog();
       }
+      if (action === 'toggle-manual-a') {
+        self.manualAPickEnabled = !self.manualAPickEnabled;
+        if (self.manualAPickEnabled) self.manualBPickEnabled = false;
+        self.message = self.manualAPickEnabled ?
+          'A手動変更・追加をONにしました。マップ上のポータルをクリックすると、選択中の計画へAとして追加します。' :
+          'A手動変更・追加をOFFにしました。';
+        self.renderDialog();
+      }
+      if (action === 'remove-last-manual-a') self.removeLastManualA();
+      if (action === 'clear-manual-a') self.clearManualAs();
       if (action === 'remove-last-manual-b') self.removeLastManualB();
       if (action === 'clear-manual-b') self.clearManualBs();
       if (action === 'open-output') self.renderOutputDialog();
@@ -1874,14 +2069,17 @@ function wrapper(pluginInfo) {
     if (!result || !self.layerGroup) return;
     self.layerGroup.clearLayers();
     var step = Math.max(0, Math.min(self.previewState.step || 0, self.previewStepCount(result) - 1));
+    var basesA = self.resultAs(result);
 
     if (step >= 1) {
       for (var i = 0; i < result.spine.length - 1; i++) {
         if (self.previewState.agents.C !== false) self.addPreviewLine(result.spine[i], result.spine[i + 1], 'C', 4, 0.9);
       }
-      for (var a = 0; a < result.spine.length; a++) {
-        var aAgent = self.agentForASpineLink(a);
-        if (self.previewState.agents[aAgent] !== false) self.addPreviewLine(result.spine[a], result.A, aAgent, 2, 0.78);
+      for (var ai = 0; ai < basesA.length; ai++) {
+        for (var a = 0; a < result.spine.length; a++) {
+          var aAgent = self.agentForASpineLink(a);
+          if (self.previewState.agents[aAgent] !== false) self.addPreviewLine(result.spine[a], basesA[ai], aAgent, 2, 0.78);
+        }
       }
     }
 
@@ -1889,7 +2087,9 @@ function wrapper(pluginInfo) {
       var bIndex = step - 2;
       var baseB = result.Bs[bIndex];
       if (baseB) {
-        if (self.previewState.agents.C !== false) self.addPreviewLine(baseB, result.A, 'C', 4, 0.9);
+        if (self.previewState.agents.C !== false) {
+          for (var bi = 0; bi < basesA.length; bi++) self.addPreviewLine(baseB, basesA[bi], 'C', 4, 0.9);
+        }
         for (var j = 0; j < result.spine.length; j++) {
           var bAgent = self.agentForBSpineLink(j);
           if (self.previewState.agents[bAgent] !== false) self.addPreviewLine(baseB, result.spine[j], bAgent, 2, 0.78);
@@ -1909,7 +2109,10 @@ function wrapper(pluginInfo) {
   };
 
   self.addPreviewMarkers = function (result, step) {
-    var rows = [['A', result.A]].concat(result.spine.map(function (p, i) {
+    var basesA = self.resultAs(result);
+    var rows = basesA.map(function (p, i) {
+      return [self.aLabel(i, basesA.length), p];
+    }).concat(result.spine.map(function (p, i) {
       return [self.spineLabel(i), p];
     }));
     if (step >= 2 && result.Bs[step - 2]) rows.push(['B' + (step - 1), result.Bs[step - 2]]);
@@ -1933,6 +2136,7 @@ function wrapper(pluginInfo) {
   self.drawResult = function (result) {
     if (!result || !self.layerGroup) return;
     self.layerGroup.clearLayers();
+    var basesA = self.resultAs(result);
 
     L.polyline(result.spine.map(function (p) { return p.latLng; }), {
       color: self.colors.spine,
@@ -1948,7 +2152,9 @@ function wrapper(pluginInfo) {
       }).addTo(self.layerGroup);
     });
 
-    [['A', result.A]].concat(result.Bs.map(function (p, i) {
+    basesA.map(function (p, i) {
+      return [self.aLabel(i, basesA.length), p];
+    }).concat(result.Bs.map(function (p, i) {
       return ['B' + (i + 1), p];
     })).concat(result.spine.map(function (p, i) {
       return [self.spineLabel(i), p];
@@ -2064,6 +2270,18 @@ function wrapper(pluginInfo) {
     return {
       total: Math.round(straightness * 0.24 + triangleScore * 0.22 + widthScore * 0.12 + baseScore * 0.24 + okawariScore * 0.18),
       straightness: Math.round(straightness)
+    };
+  };
+
+  self.shapeScoreForAs = function (spine, basesA, basesB) {
+    basesA = basesA && basesA.length ? basesA : [];
+    if (!basesA.length) return { total: 0, straightness: 0 };
+    var totals = basesA.map(function (baseA) {
+      return self.shapeScore(spine, baseA, basesB);
+    });
+    return {
+      total: Math.round(totals.reduce(function (sum, item) { return sum + item.total; }, 0) / totals.length),
+      straightness: Math.round(totals.reduce(function (sum, item) { return sum + item.straightness; }, 0) / totals.length)
     };
   };
 
