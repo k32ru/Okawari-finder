@@ -3,7 +3,7 @@
 // @name           IITC plugin: Okawari Finder
 // @namespace      https://github.com/k32ru/Okawari-finder
 // @category       Layer
-// @version        0.4.8
+// @version        0.4.9
 // @description    Pick a 15-portal bookmarked spine and find A bases plus repeat B portals for Orion okawari fields.
 // @author         k32ru
 // @updateURL      https://github.com/k32ru/Okawari-finder/raw/refs/heads/main/okawari-finder.user.js
@@ -41,6 +41,7 @@ function wrapper(pluginInfo) {
   self.message = '対象ポータルを指定して計画生成してください。';
   self.warnings = [];
   self.storageKey = 'plugin-okawari-finder-target-portals';
+  self.planStorageKey = 'plugin-okawari-finder-selected-plan';
   self.previewStorageKey = 'plugin-okawari-finder-plan-preview-state';
   self.uiStorageKey = 'plugin-okawari-finder-ui-settings';
   self.mapPickEnabled = false;
@@ -95,6 +96,7 @@ function wrapper(pluginInfo) {
     self.loadUiSettings();
     self.loadPreviewState();
     self.loadStoredTargetPortals();
+    self.loadStoredPlan();
     if (typeof window.addHook === 'function') window.addHook('portalSelected', self.handlePortalSelected);
 
     var link = document.createElement('a');
@@ -224,6 +226,7 @@ function wrapper(pluginInfo) {
     self.setTargetPortals(portals);
     self.results = [];
     self.selectedResult = -1;
+    self.clearStoredPlan();
     if (!portals.length) {
       self.message = 'ブックマークのポータルを読み込めませんでした。IITC Bookmark plugin の読み込み状態を確認してください。';
       self.warnings.push('対応している bookmark 保存形式を見つけられませんでした。');
@@ -252,6 +255,34 @@ function wrapper(pluginInfo) {
       })));
     } catch (e) {
       self.warnings.push('対象ポータルを内部ストレージへ保存できませんでした。');
+    }
+  };
+
+  self.saveSelectedPlan = function () {
+    var result = self.results[self.selectedResult];
+    if (!result) return;
+    try {
+      window.localStorage.setItem(self.planStorageKey, JSON.stringify(self.resultToExportData(result)));
+    } catch (e) {
+      self.warnings.push('選択中の計画を内部ストレージへ保存できませんでした。');
+    }
+  };
+
+  self.clearStoredPlan = function () {
+    try {
+      window.localStorage.removeItem(self.planStorageKey);
+    } catch (e) {
+      // Ignore storage failures when clearing cached plans.
+    }
+  };
+
+  self.loadStoredPlan = function () {
+    try {
+      var text = window.localStorage.getItem(self.planStorageKey);
+      if (!text) return;
+      self.importResultData(JSON.parse(text), { silent: true, fromStorage: true });
+    } catch (e) {
+      self.warnings.push('保存済み計画を読み込めませんでした。');
     }
   };
 
@@ -290,6 +321,7 @@ function wrapper(pluginInfo) {
     self.addTargetPortals([portal]);
     self.results = [];
     self.selectedResult = -1;
+    self.clearStoredPlan();
     self.targetsOpen = true;
     self.message = 'マップクリックで対象ポータルに追加しました: ' + portal.name;
     self.renderDialog();
@@ -324,6 +356,7 @@ function wrapper(pluginInfo) {
     self.results = [];
     self.selectedResult = -1;
     self.saveTargetPortals();
+    self.clearStoredPlan();
     self.clearMap();
     if (self.targetLayerGroup) self.targetLayerGroup.clearLayers();
     self.message = '対象ポータルを一括削除しました。';
@@ -474,6 +507,7 @@ function wrapper(pluginInfo) {
     }
     self.results = [];
     self.selectedResult = -1;
+    self.clearStoredPlan();
     self.message = '背骨選択: ' + self.selectedSpine.length + ' / ' + self.settings.spineSize;
     self.renderDialog();
   };
@@ -487,6 +521,7 @@ function wrapper(pluginInfo) {
     self.results = [];
     self.selectedResult = -1;
     self.saveTargetPortals();
+    self.clearStoredPlan();
     self.message = '対象ポータルを削除しました。計画対象: ' + self.selectedSpine.length + ' / ' + self.settings.spineSize;
     self.renderDialog();
     self.drawTargetPins();
@@ -526,6 +561,7 @@ function wrapper(pluginInfo) {
     evaluated.sort(self.compareResults);
     self.results = evaluated.slice(0, 50);
     self.selectedResult = self.results.length ? 0 : -1;
+    if (self.selectedResult >= 0) self.saveSelectedPlan();
     self.message = self.results.length
       ? 'B密度優先探索が完了しました。Bクラスタ ' + clusters.length + ' 件から候補 ' + self.results.length + ' 件。'
       : 'A/B候補が見つかりませんでした。画面内ポータルの読み込み範囲を広げるか、背骨選択を見直してください。';
@@ -712,6 +748,7 @@ function wrapper(pluginInfo) {
     var originalACount = self.originalACount(result, basesA);
     var rebuilt = self.rebuildResultWithAs(result, basesA.concat([portal]), originalACount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = 'Aを手動追加しました: ' + portal.name + '（現在 ' + rebuilt.As.length + '件）';
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -754,6 +791,7 @@ function wrapper(pluginInfo) {
     var basesB = result.Bs.concat([portal]);
     var rebuilt = self.rebuildResultWithBs(result, basesB, originalBCount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = 'Bを手動追加しました: ' + portal.name + '（現在 ' + rebuilt.Bs.length + '件）';
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -805,6 +843,7 @@ function wrapper(pluginInfo) {
     var nextOriginalACount = removingAutoA ? Math.max(0, originalACount - 1) : originalACount;
     var rebuilt = self.rebuildResultWithAs(result, nextAs, nextOriginalACount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = (removingAutoA ? '自動選択Aを削除しました: ' : '最後の手動追加Aを削除しました: ') + removed.name;
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -822,6 +861,7 @@ function wrapper(pluginInfo) {
     }
     var rebuilt = self.rebuildResultWithAs(result, basesA.slice(0, originalACount), originalACount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = '手動追加Aをクリアしました。';
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -839,6 +879,7 @@ function wrapper(pluginInfo) {
     var removed = result.Bs[result.Bs.length - 1];
     var rebuilt = self.rebuildResultWithBs(result, result.Bs.slice(0, -1), originalBCount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = '最後の手動追加Bを削除しました: ' + removed.name;
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -855,6 +896,7 @@ function wrapper(pluginInfo) {
     }
     var rebuilt = self.rebuildResultWithBs(result, result.Bs.slice(0, originalBCount), originalBCount);
     self.results[self.selectedResult] = rebuilt;
+    self.saveSelectedPlan();
     self.message = '手動追加Bをクリアしました。';
     self.renderDialog();
     if (self.settings.drawOnMap) self.drawResult(rebuilt);
@@ -1028,7 +1070,7 @@ function wrapper(pluginInfo) {
       format: 'okawari-finder-result',
       formatVersion: '0.1',
       plugin: self.title,
-      pluginVersion: '0.4.6',
+      pluginVersion: '0.4.9',
       generatedAt: new Date().toISOString(),
       settings: {
         spineSize: self.settings.spineSize,
@@ -1130,11 +1172,12 @@ function wrapper(pluginInfo) {
     reader.readAsText(file);
   };
 
-  self.importResultData = function (data) {
+  self.importResultData = function (data, options) {
+    options = options || {};
     if (!data || data.format !== 'okawari-finder-result' || data.formatVersion !== '0.1') {
       self.message = '対応していない結果ファイルです。';
       self.warnings = ['format は okawari-finder-result、formatVersion は 0.1 が必要です。'];
-      self.renderDialog();
+      if (!options.silent) self.renderDialog();
       return;
     }
 
@@ -1146,7 +1189,7 @@ function wrapper(pluginInfo) {
     if (spine.length !== self.settings.spineSize || !basesB.length) {
       self.message = '結果ファイルに必要な背骨/A/Bデータがありません。';
       self.warnings = ['背骨15本、基点Bが必要です。Aが空の計画は読み込み後に手動追加できます。'];
-      self.renderDialog();
+      if (!options.silent) self.renderDialog();
       return;
     }
 
@@ -1188,9 +1231,12 @@ function wrapper(pluginInfo) {
     self.manualAPickEnabled = false;
     self.manualBPickEnabled = false;
     self.warnings = [];
-    self.message = '結果JSONを読み込みました。';
-    self.renderDialog();
-    if (self.settings.drawOnMap) self.drawResult(result);
+    self.message = options.fromStorage ? '保存済み計画を読み込みました。' : '結果JSONを読み込みました。';
+    if (!options.fromStorage) self.saveSelectedPlan();
+    if (!options.silent) {
+      self.renderDialog();
+      if (self.settings.drawOnMap) self.drawResult(result);
+    }
   };
 
   self.portalFromData = function (data) {
@@ -2176,6 +2222,7 @@ function wrapper(pluginInfo) {
       if (action === 'remove-target') self.removeSelectedSpine(target.getAttribute('data-guid'));
       if (action === 'select-result') {
         self.selectedResult = parseInt(target.getAttribute('data-index'), 10);
+        self.saveSelectedPlan();
         self.renderDialog();
         if (self.settings.drawOnMap) self.drawResult(self.results[self.selectedResult]);
       }
