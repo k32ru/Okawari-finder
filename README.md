@@ -1,8 +1,8 @@
 # Okawari Finder
 
-`okawari-finder.user.js` は、Ingress の Orion 系おかわりCF計画を IITC 上で作るための userscript Plugin です。
+`okawari-finder.user.js` は、Ingress の Orion Global OpにおいておかわりCF計画を IITC 上でで支援するため userscript Plugin です。
 
-15本の背骨ポータルを先に指定し、その背骨に対して基点Aと、複数のおかわり基点Bを探します。Bはポータル密度が高い場所から優先して選び、AはそのB群と背骨15本で三角形が成立する位置から選びます。計画作成後は、条件を満たすAを手動で追加できます。
+15本の背骨ポータルを先に指定し、その背骨に対して基点Aと、複数のおかわり基点Bを探します。Bはポータル密度が高い場所から優先して選び、AはそのB群と背骨15本で三角形が成立する位置から選びます。計画作成後は、ユーザが条件を満たすAを手動で追加できます。
 
 ## できること
 
